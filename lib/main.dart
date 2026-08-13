@@ -3,6 +3,12 @@ import 'package:flutter/rendering.dart';
 
 void main() => runApp(const ProbeApp());
 
+/// Shared GlobalKey instance used by BOTH pages for probe F. A GlobalKey is
+/// the one mechanism that can carry an Element (and its RenderObject) across
+/// a parent change / route boundary, via Element.moveTo reparenting, instead
+/// of disposing the old one and creating a new one.
+final GlobalKey globalProbeKey = GlobalKey();
+
 class ProbeApp extends StatelessWidget {
   const ProbeApp({super.key});
   @override
@@ -68,8 +74,10 @@ class ProbePage extends StatefulWidget {
 
 class _ProbePageState extends State<ProbePage> {
   int _tick = 0;
+  bool _swapped = false;
 
   void _rebuild() => setState(() => _tick++);
+  void _swapParent() => setState(() => _swapped = !_swapped);
 
   @override
   Widget build(BuildContext context) {
@@ -135,6 +143,113 @@ class _ProbePageState extends State<ProbePage> {
             label: 'E-changingKey',
             text: 'tick=$_tick',
             color: Colors.red,
+          ),
+
+          // 6) GlobalKey probe, reparented between two different PARENTS in
+          //    the SAME page/build, via a toggle. canUpdate normally requires
+          //    matching slot under the SAME parent Element; moving a widget
+          //    to a genuinely different parent is otherwise an insert+delete
+          //    (CREATE+DISPOSE). A GlobalKey bypasses that: as long as the
+          //    old Element is deactivated in the same frame the new one with
+          //    a matching GlobalKey appears, Element.moveTo reparents it in
+          //    place -> expect REUSE with the SAME RO id across the swap,
+          //    not CREATE+DISPOSE.
+          //    (Note: this does NOT hold across a Navigator route push -
+          //    the push transition keeps old+new route mounted in the same
+          //    overlapping frame, so two GlobalKeys would coexist at once
+          //    and Flutter throws "Duplicate GlobalKey detected" instead.
+          //    GlobalKey reparenting only works within a single build pass.)
+          Container(
+            color: Colors.black12,
+            padding: const EdgeInsets.all(4),
+            child: _swapped
+                ? Align(
+                    alignment: Alignment.centerRight,
+                    child: ProbeBox(
+                      key: globalProbeKey,
+                      label: 'F-globalKey(parentB)',
+                      text: 'tick=$_tick',
+                      color: Colors.teal,
+                    ),
+                  )
+                : Align(
+                    alignment: Alignment.centerLeft,
+                    child: ProbeBox(
+                      key: globalProbeKey,
+                      label: 'F-globalKey(parentA)',
+                      text: 'tick=$_tick',
+                      color: Colors.teal,
+                    ),
+                  ),
+          ),
+
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _swapParent,
+            child: const Text('Swap GlobalKey probe to other parent'),
+          ),
+
+          const SizedBox(height: 8),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SecondPage()),
+            ),
+            child: const Text('Navigate to new page (push route)'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Second page: same probe declarations (same runtimeType, same ValueKey
+/// strings as page 1) but mounted under a completely different parent
+/// Element tree (a fresh route). Tests whether ValueKey/no-key reuse
+/// transcends a parent/route boundary - it doesn't, since key matching only
+/// happens among siblings under a SAME still-mounted parent Element, and a
+/// fresh route never had that parent Element before.
+class SecondPage extends StatelessWidget {
+  const SecondPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    print('\n--- SecondPage build ---');
+    return Scaffold(
+      appBar: AppBar(title: const Text('Second page (new route)')),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(8),
+            child: Text(
+              'Same ValueKey strings as page 1, but under a new parent Element tree.\n'
+              'Expect CREATE for A2/B2 despite matching keys - key matching only\n'
+              'happens among siblings under the SAME still-mounted parent Element.',
+            ),
+          ),
+
+          // A2: same key string as page1's golden case ('golden'). Different
+          // parent Element -> no prior sibling to compare against -> CREATE,
+          // not REUSE, even though the key literally matches.
+          const ProbeBox(
+            key: ValueKey('golden'),
+            label: 'A2-sameValueKeyString-newRoute',
+            text: 'fixed',
+            color: Colors.green,
+          ),
+
+          // B2: no key at all, same as C-noKey-nonConst on page 1. Still a
+          // fresh parent -> CREATE, not REUSE.
+          const ProbeBox(
+            label: 'B2-noKey-newRoute',
+            text: 'fixed',
+            color: Colors.orange,
+          ),
+
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Pop back to page 1'),
           ),
         ],
       ),
