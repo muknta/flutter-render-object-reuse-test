@@ -75,9 +75,13 @@ class ProbePage extends StatefulWidget {
 class _ProbePageState extends State<ProbePage> {
   int _tick = 0;
   bool _swapped = false;
+  List<int> _order = [0, 1, 2];
 
   void _rebuild() => setState(() => _tick++);
   void _swapParent() => setState(() => _swapped = !_swapped);
+  void _reorderList() => setState(() => _order = _order.reversed.toList());
+
+  static const _itemColors = [Colors.green, Colors.blue, Colors.orange];
 
   @override
   Widget build(BuildContext context) {
@@ -195,6 +199,55 @@ class _ProbePageState extends State<ProbePage> {
               MaterialPageRoute(builder: (_) => const SecondPage()),
             ),
             child: const Text('Navigate to new page (push route)'),
+          ),
+
+          const SizedBox(height: 24),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              'Multiple ValueKeys under the SAME parent, reordered on setState:\n'
+              'G (keyed) - watch each RO id follow its logical item across the swap.\n'
+              'H (no key) - watch RO ids stay pinned to their index; color/text swap\n'
+              'instead, meaning the same RenderObject silently becomes a different\n'
+              'logical item.',
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              // Key MUST be on the direct child of Row (the widget Row's own
+              // reconciliation compares), not on some wrapper further down.
+              // Padding carries the key here; ProbeBox itself is unkeyed.
+              for (final id in _order)
+                Padding(
+                  key: ValueKey('g-item-$id'),
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ProbeBox(
+                    label: 'G-item$id',
+                    text: 'logical=$id',
+                    color: _itemColors[id],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              for (final id in _order)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ProbeBox(
+                    label: 'H-item$id',
+                    text: 'logical=$id',
+                    color: _itemColors[id],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ElevatedButton(
+            onPressed: _reorderList,
+            child: const Text('Reverse list order (G/H)'),
           ),
         ],
       ),

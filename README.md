@@ -75,6 +75,47 @@ This is not a bug in the repro — it's a structural property of `Navigator`. A 
 
 Net effect: as long as a `GlobalKey`'d widget is present on both sides of a `Navigator.push`, there will always be at least one frame with two live `Element`s claiming the same `GlobalKey`, and Flutter's uniqueness assertion fires. `GlobalKey` reparenting is real, but it only works within a single synchronous build pass (e.g. moving a widget between parents in the same page, as probe F does) — not across a route transition.
 
+## Part 3 — multiple ValueKeys under the same parent (reorderable lists)
+
+Yes, this is normal and required for any dynamic list — every child just needs a key that's **unique among its siblings at that level** (uniqueness is scoped to one parent's child list, not global).
+
+**Theory:** when a parent like `Row`/`Column`/`ListView` reconciles its children list, it runs a keyed diff, not a purely positional one: it maps old children by key, then for each new child looks up a match by key regardless of index. If found, it calls `updateChild` on that *existing* `Element` with a new slot — the `RenderObject` is moved to its new sibling position, not disposed and recreated. Widgets with no key can only be matched positionally (index N old vs index N new), so on reorder the `RenderObject` at a given slot silently starts representing a different logical item.
+
+Two rows test this, both under the same `Row` parent, both reordered by the same "Reverse list order" button:
+
+- **G — each item's direct `Row` child carries `ValueKey('g-item-$id')`.**
+- **H — same structure, no key at all.**
+
+### Result
+
+- **G (keyed):** `REUSE` only, forever — the `RenderObject` for logical item 0 stays the *same object* across every reorder, no matter which screen slot it currently occupies. Identity follows the key, not the position.
+- **H (no key):** `REUSE` too, but the id stays pinned to **screen slot**. After reversing the list, the exact `RenderObject` that used to render item 2 is now rendering item 0 — same object, silently reassigned to a different logical item. Harmless here since `ProbeBox` has no internal state, but this is exactly the mechanism that causes state corruption in reorderable lists of stateful widgets (wrong `TextEditingController` content, wrong `AnimationController` position, etc. sticking to the wrong list item after a reorder).
+
+### A key-placement bug found along the way
+
+First attempt put the `ValueKey` on the *inner* `ProbeBox`, with an unkeyed `Padding` wrapping it as the actual child of `Row`:
+
+```dart
+Padding(                                    // <- Row sees THIS, and it's unkeyed
+  padding: const EdgeInsets.only(right: 8),
+  child: ProbeBox(key: ValueKey('g-item-$id'), ...),
+)
+```
+
+Result: `CREATE` + `DISPOSE` on every reorder — the exact opposite of what keys are supposed to buy you. Reason: `Row`'s own reconciliation only looks at its *direct* children — the `Padding`s — and matches those positionally since they carry no key. Only after a `Padding` slot is confirmed reused does its single child get compared, and by then the inner `ProbeBox`'s key no longer matches whatever used to be nested in that same slot, so it's an insert, not a move.
+
+**Fix:** move the key up to the widget that is the *direct* child of the reordering parent:
+
+```dart
+Padding(
+  key: ValueKey('g-item-$id'),               // <- Row sees this now
+  padding: const EdgeInsets.only(right: 8),
+  child: ProbeBox(...),                      // unkeyed is fine here
+)
+```
+
+Lesson: a key only participates in reconciliation at the level it's declared. One unkeyed wrapper between the key and the actual reordering parent is enough to silently defeat it.
+
 ## Running it
 
 ```
@@ -84,5 +125,6 @@ flutter run -d macos   # or any connected device
 - "Rebuild (setState)" — drives cases A–E.
 - "Swap GlobalKey probe to other parent" — drives case F.
 - "Navigate to new page (push route)" / "Pop back to page 1" — drives cases A2/B2.
+- "Reverse list order (G/H)" — drives cases G/H.
 
 Watch the console for `CREATE` / `REUSE` / `DISPOSE` lines per probe.
